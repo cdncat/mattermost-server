@@ -299,6 +299,110 @@ func TestNotifyClusterPluginEvent(t *testing.T) {
 	require.False(t, pluginStored)
 }
 
+func TestDisableOnRemove(t *testing.T) {
+	path, _ := fileutils.FindDir("tests")
+	tarData, err := ioutil.ReadFile(filepath.Join(path, "testplugin.tar.gz"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	testCases := []struct {
+		Description string
+		Upgrade     bool
+	}{
+		{
+			"Remove without upgrading",
+			false,
+		},
+		{
+			"Remove after upgrading",
+			true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.Description, func(t *testing.T) {
+			th := Setup().InitBasic()
+			defer th.TearDown()
+
+			th.App.UpdateConfig(func(cfg *model.Config) {
+				*cfg.PluginSettings.Enable = true
+				*cfg.PluginSettings.EnableUploads = true
+			})
+
+			// Upload
+			manifest, resp := th.SystemAdminClient.UploadPlugin(bytes.NewReader(tarData))
+			CheckNoError(t, resp)
+			require.Equal(t, "testplugin", manifest.Id)
+
+			// Check initial status
+			pluginsResp, resp := th.SystemAdminClient.GetPlugins()
+			CheckNoError(t, resp)
+			require.Len(t, pluginsResp.Active, 0)
+			require.Equal(t, pluginsResp.Inactive, []*model.PluginInfo{&model.PluginInfo{
+				Manifest: *manifest,
+			}})
+
+			// Enable plugin
+			ok, resp := th.SystemAdminClient.EnablePlugin(manifest.Id)
+			CheckNoError(t, resp)
+			require.True(t, ok)
+
+			// Confirm enabled status
+			pluginsResp, resp = th.SystemAdminClient.GetPlugins()
+			CheckNoError(t, resp)
+			require.Len(t, pluginsResp.Inactive, 0)
+			require.Equal(t, pluginsResp.Active, []*model.PluginInfo{&model.PluginInfo{
+				Manifest: *manifest,
+			}})
+
+			if tc.Upgrade {
+				// Upgrade
+				manifest, resp = th.SystemAdminClient.UploadPluginForced(bytes.NewReader(tarData))
+				CheckNoError(t, resp)
+				require.Equal(t, "testplugin", manifest.Id)
+
+				// Plugin should remain active
+				pluginsResp, resp = th.SystemAdminClient.GetPlugins()
+				CheckNoError(t, resp)
+				require.Len(t, pluginsResp.Inactive, 0)
+				require.Equal(t, pluginsResp.Active, []*model.PluginInfo{&model.PluginInfo{
+					Manifest: *manifest,
+				}})
+			}
+
+			// Remove plugin
+			ok, resp = th.SystemAdminClient.RemovePlugin(manifest.Id)
+			CheckNoError(t, resp)
+			require.True(t, ok)
+
+			// Plugin should have no status
+			pluginsResp, resp = th.SystemAdminClient.GetPlugins()
+			CheckNoError(t, resp)
+			require.Len(t, pluginsResp.Inactive, 0)
+			require.Len(t, pluginsResp.Active, 0)
+
+			// Upload same plugin
+			manifest, resp = th.SystemAdminClient.UploadPlugin(bytes.NewReader(tarData))
+			CheckNoError(t, resp)
+			require.Equal(t, "testplugin", manifest.Id)
+
+			// Plugin should be inactive
+			pluginsResp, resp = th.SystemAdminClient.GetPlugins()
+			CheckNoError(t, resp)
+			require.Len(t, pluginsResp.Active, 0)
+			require.Equal(t, pluginsResp.Inactive, []*model.PluginInfo{&model.PluginInfo{
+				Manifest: *manifest,
+			}})
+
+			// Clean up
+			ok, resp = th.SystemAdminClient.RemovePlugin(manifest.Id)
+			CheckNoError(t, resp)
+			require.True(t, ok)
+		})
+	}
+}
+
 func findClusterMessages(event string, msgs []*model.ClusterMessage) []*model.ClusterMessage {
 	var result []*model.ClusterMessage
 	for _, msg := range msgs {

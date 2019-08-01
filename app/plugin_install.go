@@ -160,6 +160,10 @@ func (a *App) RemovePlugin(id string) *model.AppError {
 }
 
 func (a *App) removePlugin(id string) *model.AppError {
+	if err := a.DisablePlugin(id); err != nil {
+		return err
+	}
+
 	if err := a.removePluginLocally(id); err != nil {
 		return err
 	}
